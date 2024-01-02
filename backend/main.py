@@ -1,80 +1,65 @@
-# Test URL = http://localhost:5000/download?url=https://www.youtube.com/watch?v=bNNGaqe9VzU&list=PLrAXtmErZgOeciFP3CBCIEElOJeitOr41&ab_channel=LexClips
+# http://127.0.0.1:5000/diarize?url=https://www.youtube.com/watch?v=cjwpxzXlpC8&ab_channel=LexClips
+# http://127.0.0.1:5000/transcribe?url=https://www.youtube.com/watch?v=cjwpxzXlpC8&ab_channel=LexClips
 
-
-# create a Flask app to download audio files from url and convert to mp3, 
-# then upload to S3 bucket (In Future)
-# add them to a queue to be processed by a worker
-# worker transcribes the audio file and saves the transcription to a database
-# worker sends a notification 
-# second worker reads the transcription and summarizes it
-# the summary is sent to the user
-
-import os 
-import youtube_dl
-from flask import Flask, request, jsonify
-# import pymongo
-# from pymongo import MongoClient
-import whisper
-from transformers import pipeline
-from summarize import summarizer
+from flask import Flask, render_template, request, jsonify
+from download_utils import download_audio_youtube
+from transcription_utils import transcribe
+from diarization import diarization_function, tsv_to_json
+import os
+import timeit
+import json
 
 app = Flask(__name__)
-summarizer = pipeline("summarization", model="t5-base", tokenizer="t5-base", framework="tf")
-model = whisper.load_model("tiny.en")
+
 
 @app.route('/', methods=["GET"])
 def index():
     return "<H1>Hello World</H1>"
 
-@app.route('/download', methods=["GET","POST"])
-
-def download():
+@app.route('/transcribe', methods=["GET","POST"])
+def transcribe_audio():
     # get url from request
     #print("Request method: ", request.method)
     if request.method == "GET":
-        print(request.args.get("url"))
+        #print(request.args.get("url"))
         url = request.args.get("url")
-        ydl_opts = {
-        "outtmpl": "file.mp3",
-        "format": "bestaudio/best",
-        # "postprocessors": [{
-        #     "key": "FFmpegExtractAudio",
-        #     "preferredcodec": "mp3",
-        #     "preferredquality": "192",
-        #     }],
-        }
-        print("########################## Downloading audio now #####################\n")
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        print("########################## Download completed! #####################\n")
-        # upload to S3 bucket
-        # or upload to MongoDB
-        # add to queue
-        # for implemenation later
-
-        print("######################### Transcribing audio now #####################\n")
+        start_time  = timeit.default_timer()
+        download_audio_youtube(url)
         
-        result = model.transcribe("file.mp3", fp16=False)
-        #print(result["text"])
-        # save trascrtiption to a text file
-        with open("transcription.txt", "w") as f:
-            f.write(result["text"])
-        print("######################### Transcription completed! #####################\n")
+        print("Starting transcription..........")
+        # transcribe the audio in audio folder
+        file_name = os.listdir("audio")[0]
+        transription = transcribe("audio/"+file_name)
+        
+        print("Transcription completed..........")
+        print("Time taken to process the audio file:", timeit.default_timer()-start_time)
+    return jsonify({"transcription":transription})
 
-        # summarize the transcription
-        with open("transcription.txt", "r") as f:
-            summar_text = f.read()
-        print("###################### Summarizing transcription now ###################\n")
-        summary = summarizer(summar_text, max_length=500, min_length=100, do_sample=False)
-        print(summary[0]["summary_text"])
-        print("######################### Summarization completed! #####################\n")
-        # save summary to a text file
-        with open("summary.txt", "w") as f:
-            f.write(summary[0]["summary_text"])
+@app.route('/diarize', methods=["GET","POST"])
+def diarize_audio():
+    # get url from request
+    #print("Request method: ", request.method)
+    if request.method == "GET":
+        #print(request.args.get("url"))
+        url = request.args.get("url")
+        start_time  = timeit.default_timer()
+        download_audio_youtube(url)
+        
+        print("Starting transcription..........")
+        # transcribe the audio in audio folder
+        file_name = os.listdir("audio")[0]
+        _ = transcribe("audio/"+file_name)
+        print("Transcription completed..........")
+        print("Starting diarization..........")
+        # diarize the audio file
+        diarization_function("audio/"+file_name)
+        print("Diarization completed..........")
+        print("Time taken to process the audio file:", timeit.default_timer()-start_time)
 
-    return jsonify({"message": "success"})
+        data = tsv_to_json("Final_tsv/"+file_name.split(".")[0]+".tsv")
+        print("Time taken to process the audio file: "+str(timeit.default_timer()-start_time))
+    return jsonify(data)
 
 
-if __name__ == "__main__":
-    print("Starting server...")
+if __name__ == '__main__':
     app.run(debug=True)
